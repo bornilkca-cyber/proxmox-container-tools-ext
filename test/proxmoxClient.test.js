@@ -1194,8 +1194,10 @@ test('rejects invalid trusted certificate fingerprints before the request is sen
 });
 
 test('rejects changed pinned certificates with a certificate mismatch error', async () => {
+  let receivedRequest = false;
   await withSelfSignedServer(
     (req, res) => {
+      receivedRequest = true;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ data: [] }));
     },
@@ -1209,6 +1211,7 @@ test('rejects changed pinned certificates with a certificate mismatch error', as
         () => client.getClusterResources(),
         /certificate does not match/
       );
+      assert.equal(receivedRequest, false);
     }
   );
 });

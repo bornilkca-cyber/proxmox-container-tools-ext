@@ -1,6 +1,7 @@
 import { ClusterResource, ProxmoxApiResponse, ProxmoxConnection, ProxmoxCredentials, ProxmoxTaskStatus, SnapshotResource, StorageResource } from './proxmoxTypes';
 import * as https from 'node:https';
 import { X509Certificate } from 'node:crypto';
+import * as tls from 'node:tls';
 import { TLSSocket } from 'node:tls';
 
 const requestTimeoutMs = 10000;
@@ -254,6 +255,7 @@ export class ProxmoxClient {
   private getWithPinnedCertificate(url: string, signal: AbortSignal, method: 'GET' | 'POST' = 'GET'): Promise<Response> {
     return new Promise((resolve, reject) => {
       let settled = false;
+      let socket: TLSSocket | undefined;
       const trustedFingerprint = normalizeCertificateFingerprint(this.connection.certificateFingerprint);
       if (trustedFingerprint === undefined) {
         reject(new ProxmoxApiError('The trusted Proxmox certificate fingerprint is invalid. Trust the server certificate again.'));
@@ -267,56 +269,103 @@ export class ProxmoxClient {
         signal.removeEventListener('abort', abort);
         callback();
       };
-      const request = https.request(url, {
-        method,
-        headers: {
-          Accept: 'application/json',
-          Authorization: this.authorizationHeader()
-        },
+      const abort = () => {
+        socket?.destroy(new Error('aborted'));
+      };
+      signal.addEventListener('abort', abort, { once: true });
+      const parsedUrl = new URL(url);
+      socket = tls.connect({
+        host: parsedUrl.hostname,
+        port: parsedUrl.port ? Number(parsedUrl.port) : 443,
+        servername: parsedUrl.hostname,
         // Disables TLS session resumption so the server always sends its full certificate to verify.
-        agent: false,
         rejectUnauthorized: false
-      }, (response) => {
-        const certificate = (response.socket as TLSSocket).getPeerCertificate(true);
-        const peerFingerprint = peerCertificateFingerprint(certificate);
+      });
+      socket.once('secureConnect', () => {
+        const peerFingerprint = peerCertificateFingerprint(socket?.getPeerCertificate(true));
         if (peerFingerprint === undefined) {
-          response.resume();
+          socket?.destroy();
           finish(() => reject(new ProxmoxApiError('The Proxmox server did not provide a valid certificate fingerprint. Trust the server certificate again.')));
           return;
         }
         if (peerFingerprint !== trustedFingerprint) {
-          response.resume();
+          socket?.destroy();
           finish(() => reject(new ProxmoxApiError('The Proxmox server certificate does not match the certificate trusted for this connection. Trust the current certificate again only if you verified the new SHA-256 fingerprint out of band.')));
           return;
         }
-
-        const chunks: Buffer[] = [];
+        const responseChunks: Buffer[] = [];
         let responseBytes = 0;
-        response.on('data', (chunk: Buffer) => {
+        socket?.on('data', (chunk: Buffer) => {
           responseBytes += chunk.length;
           if (responseBytes > maxResponseBytes) {
-            response.destroy(new ProxmoxApiError('The Proxmox response exceeded the maximum supported size.'));
+            socket?.destroy(new ProxmoxApiError('The Proxmox response exceeded the maximum supported size.'));
             return;
           }
-          chunks.push(chunk);
+          responseChunks.push(chunk);
         });
-        response.on('error', (error) => finish(() => reject(error)));
-        response.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf8');
-          finish(() => resolve({
-            ok: (response.statusCode ?? 500) >= 200 && (response.statusCode ?? 500) < 300,
-            status: response.statusCode ?? 500,
-            statusText: response.statusMessage ?? '',
-            json: async () => JSON.parse(body)
-          } as Response));
+        socket?.once('error', (error) => finish(() => reject(error)));
+        socket?.once('end', () => {
+          try {
+            const response = parsePinnedResponse(Buffer.concat(responseChunks));
+            finish(() => resolve(response));
+          } catch (error) {
+            finish(() => reject(error));
+          }
         });
+        socket?.write(`${method} ${parsedUrl.pathname}${parsedUrl.search} HTTP/1.1\r\nHost: ${parsedUrl.host}\r\nAccept: application/json\r\nAuthorization: ${this.authorizationHeader()}\r\nConnection: close\r\n\r\n`);
       });
-      const abort = () => request.destroy(new Error('aborted'));
-      signal.addEventListener('abort', abort, { once: true });
-      request.on('error', (error) => finish(() => reject(error)));
-      request.end();
+      socket.on('error', (error) => finish(() => reject(error)));
     });
   }
+}
+
+function parsePinnedResponse(payload: Buffer): Response {
+  const separator = payload.indexOf('\r\n\r\n');
+  if (separator < 0) {
+    throw new ProxmoxApiError('Proxmox returned an invalid response.');
+  }
+  const headerText = payload.subarray(0, separator).toString('latin1');
+  const statusMatch = /^HTTP\/\d\.\d (\d{3})(?: ([^\r\n]*))?$/m.exec(headerText);
+  if (statusMatch === null) {
+    throw new ProxmoxApiError('Proxmox returned an invalid response.');
+  }
+  const status = Number(statusMatch[1]);
+  const statusText = statusMatch[2] ?? '';
+  const headers = new Map(headerText.split('\r\n').slice(1).map((line) => {
+    const separator = line.indexOf(':');
+    return [line.slice(0, separator).toLowerCase(), line.slice(separator + 1).trim()];
+  }));
+  let body = payload.subarray(separator + 4);
+  if (headers.get('transfer-encoding')?.toLowerCase() === 'chunked') {
+    body = decodeChunkedBody(body);
+  }
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText,
+    json: async () => JSON.parse(body.toString('utf8'))
+  } as Response;
+}
+
+function decodeChunkedBody(body: Buffer): Buffer {
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  while (offset < body.length) {
+    const lineEnd = body.indexOf('\r\n', offset);
+    if (lineEnd < 0) {
+      throw new ProxmoxApiError('Proxmox returned an invalid response.');
+    }
+    const size = Number.parseInt(body.subarray(offset, lineEnd).toString('ascii').split(';', 1)[0], 16);
+    if (!Number.isFinite(size) || size < 0 || lineEnd + 2 + size + 2 > body.length) {
+      throw new ProxmoxApiError('Proxmox returned an invalid response.');
+    }
+    if (size === 0) {
+      break;
+    }
+    chunks.push(body.subarray(lineEnd + 2, lineEnd + 2 + size));
+    offset = lineEnd + 2 + size + 2;
+  }
+  return Buffer.concat(chunks);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

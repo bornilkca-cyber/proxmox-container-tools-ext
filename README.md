@@ -105,6 +105,8 @@ test/
 
 - Prefer scoped Proxmox API tokens with the minimum required permissions.
 - Use HTTPS and make certificate-validation behavior explicit. Never silently disable TLS verification.
+- Trusted server certificates are pinned by their normalized SHA-256 leaf fingerprint. The extension accepts standard colon-delimited and compact fingerprint formats, then stores the canonical colon-delimited form.
+- A certificate mismatch means the server presented a different certificate. Verify the replacement fingerprint out of band, then use **Proxmox: Trust Server Certificate** on that connection to replace the pin.
 - Store secrets only with `SecretStorage`.
 - Redact authorization headers and token values from logs and error messages.
 - Treat power operations as potentially disruptive and require confirmation.
@@ -116,6 +118,7 @@ test/
 - Guest state is visible and can be refreshed without reloading VS Code.
 - Start and stop work for supported guests, require confirmation, and show task completion or failure.
 - Invalid credentials, permission failures, network failures, and self-signed certificates produce actionable errors.
+- Trusting a displayed server fingerprint allows subsequent pinned API requests; malformed or incomplete certificate fingerprints are rejected before use.
 - No credentials appear in settings, source control, telemetry, or logs.
 
 ## Open decisions
