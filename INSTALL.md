@@ -29,9 +29,9 @@ QEMU and LXC guests provide an **Open SSH Terminal** action. It opens a VS Code 
 - Network access to the Proxmox VE server when using the extension.
 - A Proxmox API token with read-only permissions for inventory and status queries.
 
-The extension requires HTTPS URLs. Certificate validation should remain enabled. A self-signed certificate must be trusted by the environment running VS Code; do not disable TLS verification globally. The certificate must be trusted in the environment where the extension is installed, which may be different from the local desktop when using Remote SSH.
+The extension requires HTTPS URLs. By default, normal TLS certificate validation should remain enabled. A self-signed certificate must be trusted by the environment running VS Code; do not disable TLS verification globally. The certificate must be trusted in the environment where the extension is installed, which may be different from the local desktop when using Remote SSH.
 
-When you use **Proxmox: Trust Server Certificate**, the extension records the server's SHA-256 leaf-certificate fingerprint and pins future API requests to it. Fingerprints are normalized before storage, so case and standard compact versus colon-delimited formatting do not cause a mismatch.
+When you use **Proxmox: Trust Server Certificate**, the extension records the server's SHA-256 leaf-certificate fingerprint and pins future API requests to it. For that per-connection pinned path, normal TLS chain and hostname validation is deliberately disabled; the extension instead verifies the out-of-band-confirmed leaf fingerprint during the TLS handshake before sending credentials. This allows a self-signed certificate to be used without installing its CA, while still requiring explicit fingerprint verification. Fingerprints are normalized before storage, so case and standard compact versus colon-delimited formatting do not cause a mismatch.
 
 ## Install the packaged extension
 
@@ -145,6 +145,8 @@ The error `The Proxmox server certificate does not match the certificate trusted
 4. Refresh the connection.
 
 Do not bypass certificate validation, remove the fingerprint from extension storage manually, or accept an unexpected replacement fingerprint. If the server uses multiple nodes or a load balancer, ensure every endpoint reached through the configured URL presents the same certificate.
+
+If an unexpected mismatch may have exposed the API token to an untrusted endpoint, revoke or rotate that token before retrying the connection.
 
 ## Read-only testing policy
 
