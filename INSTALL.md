@@ -31,6 +31,8 @@ QEMU and LXC guests provide an **Open SSH Terminal** action. It opens a VS Code 
 
 The extension requires HTTPS URLs. Certificate validation should remain enabled. A self-signed certificate must be trusted by the environment running VS Code; do not disable TLS verification globally. The certificate must be trusted in the environment where the extension is installed, which may be different from the local desktop when using Remote SSH.
 
+When you use **Proxmox: Trust Server Certificate**, the extension records the server's SHA-256 leaf-certificate fingerprint and pins future API requests to it. Fingerprints are normalized before storage, so case and standard compact versus colon-delimited formatting do not cause a mismatch.
+
 ## Install the packaged extension
 
 If a VSIX package is available:
@@ -133,6 +135,17 @@ Expand a QEMU or LXC guest to view its read-only snapshots. Snapshot entries sho
 
 Connections with an untrusted certificate show a warning-style server icon and an inline shield action. After trusting a certificate, the connection shows a verified icon; use its context menu to trust a replacement certificate after a server certificate rotation.
 
+### Certificate mismatch
+
+The error `The Proxmox server certificate does not match the certificate trusted for this connection.` means the current server certificate differs from the certificate previously pinned for that connection. This can occur after a Proxmox certificate rotation, a rebuilt node, a load balancer routing to a server with a different certificate, or a network interception attempt.
+
+1. Obtain the current SHA-256 leaf-certificate fingerprint from a trusted administrative channel.
+2. Compare it with the fingerprint shown by **Proxmox: Trust Server Certificate**.
+3. Only when the values match, confirm the trust prompt to replace the old pin.
+4. Refresh the connection.
+
+Do not bypass certificate validation, remove the fingerprint from extension storage manually, or accept an unexpected replacement fingerprint. If the server uses multiple nodes or a load balancer, ensure every endpoint reached through the configured URL presents the same certificate.
+
 ## Read-only testing policy
 
 The designated test server is strictly read-only. Live testing may use authentication and inventory/status/snapshot-list `GET` requests only.
@@ -165,6 +178,10 @@ Check the server URL, realm, username, token ID, token permissions, and token se
 ### The certificate is rejected
 
 Install or trust the issuing CA in the VS Code host environment, then reload VS Code and retry. For Remote SSH, install the CA on the remote host running the extension. Alternatively, open the connection context menu and choose **Proxmox: Trust Server Certificate**. Verify the displayed SHA-256 leaf-certificate fingerprint out of band before confirming; the certificate is pinned to that connection only. Do not use an insecure TLS bypass.
+
+### The certificate does not match the trusted certificate
+
+Follow the [Certificate mismatch](#certificate-mismatch) procedure. Re-trusting a certificate intentionally replaces the existing pin only after you confirm the newly displayed SHA-256 fingerprint.
 
 ### Live testing cannot reach the server
 
