@@ -7,7 +7,7 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { X509Certificate } = require('node:crypto');
 const { readCertificateFingerprint } = require('../out/certificateTrust');
-const { ProxmoxApiError, ProxmoxClient } = require('../out/proxmoxClient');
+const { ProxmoxApiError, ProxmoxClient, parsePinnedResponse } = require('../out/proxmoxClient');
 const { isProxmoxConnection } = require('../out/proxmoxTypes');
 
 function connection(baseUrl = 'https://host:8006') {
@@ -1263,7 +1263,7 @@ test('sends POST requests over a pinned certificate and parses the task response
 test('rejects truncated chunked responses before accepting the body', async () => {
   const payload = Buffer.from(
     'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n' +
-    '4\r\nWiki\r\n' +
+    '5\r\nWiki\r\n' +
     '0\r\n'
   );
   assert.throws(() => parsePinnedResponse(payload), /invalid response/);
