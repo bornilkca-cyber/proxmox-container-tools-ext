@@ -1,0 +1,186 @@
+{
+  "name": "proxmox-container-tools-ext",
+  "displayName": "Proxmox Container Tools",
+  "description": "Manage Proxmox VE servers, virtual machines, and LXC containers from VS Code.",
+  "version": "0.0.1",
+  "publisher": "bornilkca-cyber",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bornilkca-cyber/proxmox-container-tools-ext.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=20"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "proxmox",
+          "title": "Proxmox",
+          "icon": "./media/proxmox.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "proxmox.addConnection",
+        "title": "Proxmox: Add Connection",
+        "icon": "$(add)"
+      },
+      {
+        "command": "proxmox.refresh",
+        "title": "Proxmox: Refresh All Connections",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "proxmox.refreshConnection",
+        "title": "Proxmox: Refresh Connection",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "proxmox.trustCertificate",
+        "title": "Proxmox: Trust Server Certificate",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "proxmox.openShell",
+        "title": "Proxmox: Open Container Shell",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "proxmox.openSshTerminal",
+        "title": "Proxmox: Open SSH Terminal",
+        "icon": {
+          "light": "./media/ssh-terminal-blue.svg",
+          "dark": "./media/ssh-terminal-blue.svg"
+        }
+      },
+      {
+        "command": "proxmox.startGuest",
+        "title": "Proxmox: Start Guest",
+        "icon": "$(play)"
+      },
+      {
+        "command": "proxmox.stopGuest",
+        "title": "Proxmox: Stop Guest",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "proxmox.removeConnection",
+        "title": "Proxmox: Remove Connection",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "proxmox.updateConnection",
+        "title": "Proxmox: Update Connection",
+        "icon": "$(edit)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "proxmox.addConnection",
+          "when": "view == proxmoxExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "proxmox.refresh",
+          "when": "view == proxmoxExplorer",
+          "group": "navigation"
+        }
+      ],
+      "view/context": [
+        {
+          "command": "proxmox.addConnection",
+          "when": "view == proxmoxExplorer",
+          "group": "proxmox"
+        },
+        {
+          "command": "proxmox.refresh",
+          "when": "view == proxmoxExplorer",
+          "group": "proxmox"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "proxmox.startGuest",
+          "when": "view == proxmoxExplorer && (viewItem == proxmoxContainer:stopped || viewItem == proxmoxQemu:stopped)",
+          "group": "inline@2"
+        },
+        {
+          "command": "proxmox.stopGuest",
+          "when": "view == proxmoxExplorer && (viewItem == proxmoxContainer:running || viewItem == proxmoxQemu:running)",
+          "group": "inline@3"
+        },
+        {
+          "command": "proxmox.openShell",
+          "when": "view == proxmoxExplorer && (viewItem == proxmoxContainer || viewItem == proxmoxContainer:running || viewItem == proxmoxContainer:stopped)",
+          "group": "inline@1"
+        },
+        {
+          "command": "proxmox.openSshTerminal",
+          "when": "view == proxmoxExplorer && (viewItem == proxmoxContainer || viewItem == proxmoxQemu || viewItem == proxmoxContainer:running || viewItem == proxmoxContainer:stopped || viewItem == proxmoxQemu:running || viewItem == proxmoxQemu:stopped)",
+          "group": "inline@4"
+        },
+        {
+          "command": "proxmox.refreshConnection",
+          "when": "view == proxmoxExplorer && (viewItem == proxmoxConnectionTrusted || viewItem == proxmoxConnectionUntrusted)",
+          "group": "inline@1"
+        },
+        {
+          "command": "proxmox.trustCertificate",
+          "when": "view == proxmoxExplorer && viewItem == proxmoxConnectionUntrusted",
+          "group": "inline@2"
+        },
+        {
+          "command": "proxmox.trustCertificate",
+          "when": "view == proxmoxExplorer && viewItem == proxmoxConnectionTrusted",
+          "group": "proxmox@1"
+        },
+        {
+          "command": "proxmox.removeConnection",
+          "when": "view == proxmoxExplorer && (viewItem == proxmoxConnectionTrusted || viewItem == proxmoxConnectionUntrusted)",
+          "group": "inline@4"
+        },
+        {
+          "command": "proxmox.updateConnection",
+          "when": "view == proxmoxExplorer && (viewItem == proxmoxConnectionTrusted || viewItem == proxmoxConnectionUntrusted)",
+          "group": "inline@3"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "proxmoxExplorer",
+        "contents": "[Add a Proxmox connection](command:proxmox.addConnection)"
+      }
+    ],
+    "views": {
+      "proxmox": [
+        {
+          "id": "proxmoxExplorer",
+          "name": "Proxmox"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "check:node": "node -e \"const major = Number(process.versions.node.split('.')[0]); if (major < 20) { console.error('VSIX packaging requires Node.js 20 or newer. Current runtime: ' + process.version); process.exit(1); }\"",
+    "package": "npm run compile && npm run check:node && vsce package --allow-missing-repository --skip-license",
+    "test": "npm run compile && node --test test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.3.0"
+  }
+}
