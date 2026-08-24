@@ -7,7 +7,7 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { X509Certificate } = require('node:crypto');
 const { readCertificateFingerprint } = require('../out/certificateTrust');
-const { ProxmoxApiError, ProxmoxClient } = require('../out/proxmoxClient');
+const { ProxmoxApiError, ProxmoxClient, parsePinnedResponse } = require('../out/proxmoxClient');
 const { isProxmoxConnection } = require('../out/proxmoxTypes');
 
 function connection(baseUrl = 'https://host:8006') {
@@ -1191,6 +1191,82 @@ test('rejects invalid trusted certificate fingerprints before the request is sen
     ).getClusterResources(),
     /trusted Proxmox certificate fingerprint is invalid/
   );
+});
+
+test('rejects API token secrets containing ASCII control characters', () => {
+  assert.throws(
+    () => new ProxmoxClient(
+      { ...connection(), certificateFingerprint: canonicalFingerprint },
+      { tokenSecret: 'secret\r\nX-Injected: yes' },
+      2000
+    ),
+    /contains invalid control characters/
+  );
+});
+
+test('accepts pinned certificates for IPv6 Proxmox URLs', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'pve-cert-ipv6-'));
+  const keyPath = path.join(dir, 'key.pem');
+  const certPath = path.join(dir, 'cert.pem');
+  try {
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-keyout', keyPath, '-out', certPath,
+      '-days', '1', '-nodes', '-subj', '/CN=localhost'
+    ]);
+    const key = readFileSync(keyPath);
+    const cert = readFileSync(certPath);
+    const fingerprint256 = new X509Certificate(cert).fingerprint256;
+    const server = https.createServer({ key, cert }, (req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [] }));
+    });
+    await new Promise((resolve, reject) => {
+      server.listen(0, '::1', () => {
+        const { port } = server.address();
+        new ProxmoxClient(
+          { ...connection(`https://[::1]:${port}`), certificateFingerprint: fingerprint256 },
+          { tokenSecret: 'secret' },
+          2000
+        ).getClusterResources()
+          .then((resources) => {
+            assert.deepEqual(resources, []);
+            resolve();
+          }, reject)
+          .finally(() => server.close());
+      });
+      server.on('error', reject);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('sends POST requests over a pinned certificate and parses the task response', async () => {
+  await withSelfSignedServer(
+    (req, res) => {
+      assert.equal(req.method, 'POST');
+      assert.equal(req.url, '/api2/json/nodes/pve1/lxc/101/status/start');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: 'UPID:pve1:start:101' }));
+    },
+    async (baseUrl, fingerprint256) => {
+      const client = new ProxmoxClient(
+        { ...connection(baseUrl), certificateFingerprint: fingerprint256 },
+        { tokenSecret: 'secret' },
+        2000
+      );
+      assert.equal(await client.startGuest('lxc', 'pve1', 101), 'UPID:pve1:start:101');
+    }
+  );
+});
+
+test('rejects chunked responses when the declared size exceeds available bytes', async () => {
+  const payload = Buffer.from(
+    'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n' +
+    '5\r\nWiki\r\n' +
+    '0\r\n'
+  );
+  assert.throws(() => parsePinnedResponse(payload), /invalid response/);
 });
 
 test('rejects changed pinned certificates with a certificate mismatch error', async () => {

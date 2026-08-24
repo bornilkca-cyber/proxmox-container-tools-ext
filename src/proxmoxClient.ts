@@ -1,6 +1,7 @@
 import { ClusterResource, ProxmoxApiResponse, ProxmoxConnection, ProxmoxCredentials, ProxmoxTaskStatus, SnapshotResource, StorageResource } from './proxmoxTypes';
 import * as https from 'node:https';
 import { X509Certificate } from 'node:crypto';
+import { isIP } from 'node:net';
 import * as tls from 'node:tls';
 import { TLSSocket } from 'node:tls';
 
@@ -36,6 +37,9 @@ export class ProxmoxClient {
     }
     if (credentials.tokenSecret.trim() === '') {
       throw new ProxmoxApiError('Proxmox API token secret is missing.');
+    }
+    if (/[\x00-\x1f\x7f]/.test(credentials.tokenSecret)) {
+      throw new ProxmoxApiError('Proxmox API token secret contains invalid control characters.');
     }
     if (url.protocol !== 'https:') {
       throw new ProxmoxApiError('Proxmox connections must use HTTPS.');
@@ -274,10 +278,12 @@ export class ProxmoxClient {
       };
       signal.addEventListener('abort', abort, { once: true });
       const parsedUrl = new URL(url);
+      const tlsHost = parsedUrl.hostname.replace(/^\[|\]$/g, '');
+      const tlsServername = isIP(tlsHost) ? undefined : tlsHost;
       socket = tls.connect({
-        host: parsedUrl.hostname,
+        host: tlsHost,
         port: parsedUrl.port ? Number(parsedUrl.port) : 443,
-        servername: parsedUrl.hostname,
+        servername: tlsServername,
         // Disables TLS session resumption so the server always sends its full certificate to verify.
         rejectUnauthorized: false
       });
@@ -319,7 +325,7 @@ export class ProxmoxClient {
   }
 }
 
-function parsePinnedResponse(payload: Buffer): Response {
+export function parsePinnedResponse(payload: Buffer): Response {
   const separator = payload.indexOf('\r\n\r\n');
   if (separator < 0) {
     throw new ProxmoxApiError('Proxmox returned an invalid response.');
@@ -350,22 +356,28 @@ function parsePinnedResponse(payload: Buffer): Response {
 function decodeChunkedBody(body: Buffer): Buffer {
   const chunks: Buffer[] = [];
   let offset = 0;
+
   while (offset < body.length) {
     const lineEnd = body.indexOf('\r\n', offset);
     if (lineEnd < 0) {
       throw new ProxmoxApiError('Proxmox returned an invalid response.');
     }
     const size = Number.parseInt(body.subarray(offset, lineEnd).toString('ascii').split(';', 1)[0], 16);
-    if (!Number.isFinite(size) || size < 0 || lineEnd + 2 + size + 2 > body.length) {
+    if (!Number.isFinite(size) || size < 0) {
       throw new ProxmoxApiError('Proxmox returned an invalid response.');
     }
+    offset = lineEnd + 2;
     if (size === 0) {
-      break;
+      return Buffer.concat(chunks);
     }
-    chunks.push(body.subarray(lineEnd + 2, lineEnd + 2 + size));
-    offset = lineEnd + 2 + size + 2;
+    if (offset + size + 2 > body.length) {
+      throw new ProxmoxApiError('Proxmox returned an invalid response.');
+    }
+    chunks.push(body.subarray(offset, offset + size));
+    offset += size + 2;
   }
-  return Buffer.concat(chunks);
+
+  throw new ProxmoxApiError('Proxmox returned an invalid response.');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -656,4 +668,3 @@ function normalizeCertificateFingerprint(value: unknown): string | undefined {
   }
   return hex.match(/../g)?.join(':');
 }
-
