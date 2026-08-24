@@ -1260,7 +1260,7 @@ test('sends POST requests over a pinned certificate and parses the task response
   );
 });
 
-test('rejects truncated chunked responses before accepting the body', async () => {
+test('rejects chunked responses when the declared size exceeds available bytes', async () => {
   const payload = Buffer.from(
     'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n' +
     '5\r\nWiki\r\n' +
