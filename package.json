@@ -2,7 +2,7 @@
   "name": "proxmox-container-tools-ext",
   "displayName": "Proxmox Container Tools",
   "description": "Manage Proxmox VE servers, virtual machines, and LXC containers from VS Code.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "bornilkca-cyber",
   "license": "MIT",
   "repository": {
@@ -52,6 +52,11 @@
         "command": "proxmox.openShell",
         "title": "Proxmox: Open Container Shell",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "proxmox.openServerBrowser",
+        "title": "Proxmox: Open Server in Browser",
+        "icon": "$(globe)"
       },
       {
         "command": "proxmox.openSshTerminal",
@@ -134,6 +139,11 @@
           "group": "inline@1"
         },
         {
+          "command": "proxmox.openServerBrowser",
+          "when": "view == proxmoxExplorer && (viewItem == proxmoxConnectionTrusted || viewItem == proxmoxConnectionUntrusted)",
+          "group": "inline@2"
+        },
+        {
           "command": "proxmox.trustCertificate",
           "when": "view == proxmoxExplorer && viewItem == proxmoxConnectionUntrusted",
           "group": "inline@2"
@@ -166,6 +176,16 @@
         {
           "id": "proxmoxExplorer",
           "name": "Proxmox"
+        },
+        {
+          "id": "proxmox.guestDetails",
+          "name": "Guest Details",
+          "type": "webview"
+        },
+        {
+          "id": "proxmox.dashboard",
+          "name": "Dashboard",
+          "type": "webview"
         }
       ]
     }
@@ -174,13 +194,49 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "check:node": "node -e \"const major = Number(process.versions.node.split('.')[0]); if (major < 20) { console.error('VSIX packaging requires Node.js 20 or newer. Current runtime: ' + process.version); process.exit(1); }\"",
+    "lint": "eslint src test --ext .ts,.js",
+    "lint:fix": "eslint src test --ext .ts,.js --fix",
+    "lint:check": "eslint src test --ext .ts,.js --format json --output-file eslint-report.json || true",
     "package": "npm run compile && npm run check:node && vsce package --allow-missing-repository --skip-license",
-    "test": "npm run compile && node --test test"
+    "test": "npm run compile && node --test test",
+    "test:coverage": "npm run compile && c8 --reporter=html --reporter=json --reporter=text --reporter=lcov node --test test",
+    "test:ci": "npm run compile && c8 node --test test"
+  },
+  "c8": {
+    "all": true,
+    "include": [
+      "out/**/*.js"
+    ],
+    "exclude": [
+      "out/**/*.test.js",
+      "out/**/*.spec.js",
+      "coverage/**",
+      "node_modules/**"
+    ],
+    "reporter": [
+      "text",
+      "text-summary",
+      "html",
+      "json",
+      "lcov"
+    ],
+    "report-dir": "./coverage",
+    "skip-full": false,
+    "temp-dir": ".c8_output"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.68.0",
     "@vscode/vsce": "^3.9.2",
+    "c8": "^12.0.0",
+    "eslint": "^8.57.1",
+    "eslint-plugin-import": "^2.32.0",
+    "nyc": "^15.1.0",
     "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1"
   }
 }
