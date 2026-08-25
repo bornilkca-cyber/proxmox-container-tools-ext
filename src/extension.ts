@@ -3,23 +3,78 @@ import { randomUUID } from 'node:crypto';
 import { userInfo } from 'node:os';
 import { readCertificateFingerprint } from './certificateTrust';
 import { ConnectionStore } from './connectionStore';
+import { DashboardPanelProvider } from './dashboardPanel';
+import { GuestDetailsPanelProvider } from './guestDetailsPanel';
 import { ProxmoxExplorerProvider } from './explorerProvider';
 import { ProxmoxService } from './proxmoxService';
-import { ProxmoxConnection } from './proxmoxTypes';
+import { ProxmoxConnection, ClusterResource } from './proxmoxTypes';
 import { buildLxcShellUrl, buildSshCommand, guestActionKey, resolveGuestActionItem, resolveShellItem } from './shellAccess';
 
 export function activate(context: vscode.ExtensionContext): void {
   const connectionStore = new ConnectionStore(context);
   const inFlightGuestActions = new Set<string>();
   const explorerProvider = new ProxmoxExplorerProvider(connectionStore, inFlightGuestActions);
+  const guestDetailsPanel = new GuestDetailsPanelProvider(context.extensionUri);
+  const dashboardPanel = new DashboardPanelProvider(context.extensionUri);
+
   const proxmoxTree = vscode.window.createTreeView('proxmoxExplorer', {
     treeDataProvider: explorerProvider,
     showCollapseAll: true
   });
 
+  // Handle tree selection changes to update guest details panel and dashboard
+  const updateGuestDetails = () => {
+    const selectedItem = proxmoxTree.selection[0];
+
+    // Only update panel if a guest is selected
+    if (selectedItem && typeof selectedItem === 'object' && 'connection' in selectedItem && 'resource' in selectedItem) {
+      const guest = selectedItem as { connection: ProxmoxConnection; resource: ClusterResource };
+      if (guest.resource.vmid !== undefined && guest.resource.node !== undefined) {
+        // Load credentials and fetch guest config
+        (async () => {
+          try {
+            const credentials = await connectionStore.getCredentials(guest.connection);
+            if (credentials === undefined) {
+              guestDetailsPanel.updateGuest(undefined);
+              dashboardPanel.updateGuest(undefined);
+              return;
+            }
+
+            const service = new ProxmoxService(guest.connection, credentials);
+            // eslint-disable @typescript-eslint/no-non-null-assertion
+            const guestInfo = await service.loadGuestConfig(
+              guest.resource.type as 'lxc' | 'qemu',
+              guest.resource.node!,
+              guest.resource.vmid!
+            );
+            // eslint-enable @typescript-eslint/no-non-null-assertion
+            guestDetailsPanel.updateGuest(guestInfo);
+            // Update dashboard with guest config and resource data
+            dashboardPanel.updateGuest({ ...guestInfo, resource: guest.resource });
+          } catch {
+            guestDetailsPanel.updateGuest(undefined);
+            dashboardPanel.updateGuest(undefined);
+          }
+        })();
+      } else {
+        guestDetailsPanel.updateGuest(undefined);
+        dashboardPanel.updateGuest(undefined);
+      }
+    } else {
+      guestDetailsPanel.updateGuest(undefined);
+      dashboardPanel.updateGuest(undefined);
+    }
+  };
+
+  proxmoxTree.onDidChangeSelection(updateGuestDetails);
+
   context.subscriptions.push(
     proxmoxTree,
     explorerProvider,
+    guestDetailsPanel,
+    dashboardPanel,
+    vscode.window.registerWebviewViewProvider(GuestDetailsPanelProvider.viewType, guestDetailsPanel),
+    vscode.window.registerWebviewViewProvider(DashboardPanelProvider.viewType, dashboardPanel),
     vscode.commands.registerCommand('proxmox.refresh', () => explorerProvider.refresh()),
     vscode.commands.registerCommand('proxmox.refreshConnection', (item: unknown) => {
       const connection = resolveConnectionItem(item, proxmoxTree.selection, connectionStore);
@@ -37,18 +92,52 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       await vscode.env.openExternal(vscode.Uri.parse(buildLxcShellUrl(shellItem)));
     }),
-    vscode.commands.registerCommand('proxmox.openSshTerminal', (item: unknown) => {
+    vscode.commands.registerCommand('proxmox.openServerBrowser', async (item: unknown) => {
+      const connection = resolveConnectionItem(item, proxmoxTree.selection, connectionStore);
+      if (connection === undefined) {
+        vscode.window.showErrorMessage('Select a Proxmox server first.');
+        return;
+      }
+      const urlError = validateHttpsUrl(connection.baseUrl);
+      if (urlError !== undefined) {
+        vscode.window.showErrorMessage(`Cannot open server in browser: ${urlError}`);
+        return;
+      }
+      await vscode.env.openExternal(vscode.Uri.parse(connection.baseUrl));
+    }),
+    vscode.commands.registerCommand('proxmox.openSshTerminal', async (item: unknown) => {
       const guest = resolveGuestActionItem(item, proxmoxTree.selection);
       if (guest === undefined) {
         vscode.window.showErrorMessage('Select a QEMU virtual machine or LXC container first.');
         return;
       }
 
-      const hostname = new URL(guest.connection.baseUrl).hostname;
       const username = resolveLocalUsername();
       if (username === undefined || username === '') {
         vscode.window.showErrorMessage('The local SSH username is unavailable.');
         return;
+      }
+
+      // Try to fetch guest config to get the hostname, fall back to server hostname
+      let hostname = new URL(guest.connection.baseUrl).hostname;
+
+      try {
+        const credentials = await connectionStore.getCredentials(guest.connection);
+        if (credentials !== undefined) {
+          const service = new ProxmoxService(guest.connection, credentials);
+          const config = await service.loadGuestConfig(
+            guest.resource.type as 'lxc' | 'qemu',
+            guest.resource.node,
+            guest.resource.vmid
+          );
+          // Use guest hostname if available and valid, otherwise use server hostname
+          if (config.hostname && typeof config.hostname === 'string' && config.hostname.trim() !== '') {
+            hostname = config.hostname;
+          }
+        }
+      } catch {
+        // Silently ignore errors and fall back to server hostname
+        // This ensures SSH terminal opens even if config fetch fails
       }
 
       const terminal = vscode.window.createTerminal({
@@ -207,11 +296,13 @@ export function activate(context: vscode.ExtensionContext): void {
           ? existing.certificateFingerprint
           : undefined
       };
+      // eslint-disable @typescript-eslint/no-non-null-assertion
       const credentials = {
         tokenSecret: replacementSecret.trim() === ''
           ? currentCredentials!.tokenSecret
           : replacementSecret.trim()
       };
+      // eslint-enable @typescript-eslint/no-non-null-assertion
 
       try {
         await connectionStore.save(updatedConnection, credentials);
@@ -309,10 +400,31 @@ async function runGuestAction(
 
     try {
       const service = new ProxmoxService(guest.connection, credentials);
+
+      // Create progress callback for UI updates
+      const onProgress: (phase: 'polling' | 'stopped' | 'failed') => void = (phase) => {
+        explorerProvider.onPollingProgress(
+          guest.connection.id,
+          guest.resource.type,
+          guest.resource.vmid,
+          phase
+        );
+      };
+
       if (action === 'start') {
-        await service.startGuest(guest.resource.type, guest.resource.node, guest.resource.vmid);
+        await service.startGuestWithProgress(
+          guest.resource.type,
+          guest.resource.node,
+          guest.resource.vmid,
+          onProgress
+        );
       } else {
-        await service.stopGuest(guest.resource.type, guest.resource.node, guest.resource.vmid);
+        await service.stopGuestWithProgress(
+          guest.resource.type,
+          guest.resource.node,
+          guest.resource.vmid,
+          onProgress
+        );
       }
       vscode.window.showInformationMessage(`${guest.resource.type.toUpperCase()} ${guest.resource.vmid} ${action === 'start' ? 'started' : 'stopped'}.`);
     } catch (error) {
@@ -373,5 +485,3 @@ function resolveLocalUsername(): string | undefined {
     return undefined;
   }
 }
-
-

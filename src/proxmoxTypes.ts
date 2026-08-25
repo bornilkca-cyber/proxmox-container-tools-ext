@@ -87,3 +87,81 @@ export interface ProxmoxTaskStatus {
   readonly status?: string;
   readonly exitstatus?: string;
 }
+
+/**
+ * Callback for polling progress updates during long-running operations like guest start/stop.
+ * Called when polling begins, completes, or fails.
+ *
+ * @param phase - Current phase: 'polling' (in progress), 'stopped' (success), or 'failed' (error)
+ * @param progress - Optional progress indicator (0-100) for UI display
+ */
+export type PollingProgressCallback = (phase: 'polling' | 'stopped' | 'failed', progress?: number) => void;
+
+/**
+ * Configuration for adaptive polling behavior during guest operations.
+ * Allows customization of polling intervals and timeouts for different scenarios.
+ */
+export interface PollingConfig {
+  /** Initial polling interval in milliseconds (default: 500) */
+  readonly initialIntervalMs?: number;
+
+  /** Maximum polling interval with exponential backoff in milliseconds (default: 30000) */
+  readonly maxIntervalMs?: number;
+
+  /** Specific polling interval for container operations in milliseconds (default: 3000) */
+  readonly containerIntervalMs?: number;
+
+  /** Maximum total polling duration in milliseconds (default: 300000 = 5 minutes) */
+  readonly maxWaitMs?: number;
+}
+
+/**
+ * Detailed configuration information for a guest (QEMU VM or LXC container).
+ * Fetched from the Proxmox API /nodes/{node}/{type}/{vmid}/config endpoint.
+ */
+export interface GuestDetailInfo {
+  readonly vmid: number;
+  readonly node: string;
+  readonly type: 'qemu' | 'lxc';
+  readonly name?: string;
+  readonly status?: string;
+
+  // CPU configuration
+  readonly cores?: number;
+  readonly cpulimit?: number;
+  readonly cpuunits?: number;
+
+  // Memory configuration (in bytes)
+  readonly memory?: number;
+  readonly balloon?: number;
+
+  // Storage configuration
+  readonly rootfs?: string;
+  readonly sata?: Record<string, unknown>;
+  readonly virtio?: Record<string, unknown>;
+  readonly ide?: Record<string, unknown>;
+  readonly scsi?: Record<string, unknown>;
+
+  // Boot configuration
+  readonly boot?: string;
+  readonly bootdisk?: string;
+
+  // Network configuration
+  readonly net?: Record<string, unknown>;
+
+  // Container-specific options
+  readonly ostype?: string;
+  readonly osrelease?: string;
+  readonly hostname?: string;
+  readonly tags?: string;
+
+  // General options
+  readonly onboot?: number; // 0 or 1
+  readonly autostart?: number; // 0 or 1
+  readonly protection?: number; // 0 or 1
+  readonly lock?: string;
+  readonly description?: string;
+
+  // Uptime and status
+  readonly uptime?: number;
+}

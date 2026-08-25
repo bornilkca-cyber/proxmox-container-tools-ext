@@ -371,7 +371,9 @@ test('preserves HTTP errors with non-JSON bodies', async () => {
     ok: false,
     status: 401,
     statusText: 'Unauthorized',
-    json: async () => { throw new SyntaxError('invalid JSON'); }
+    json: async () => {
+      throw new SyntaxError('invalid JSON');
+    }
   });
 
   try {

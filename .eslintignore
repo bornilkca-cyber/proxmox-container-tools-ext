@@ -1,0 +1,12 @@
+node_modules
+out
+dist
+build
+coverage
+.nyc_output
+.c8_output
+*.vsix
+.git
+.github
+.vscode
+*.log

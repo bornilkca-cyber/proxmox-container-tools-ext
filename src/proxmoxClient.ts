@@ -1,5 +1,4 @@
-import { ClusterResource, ProxmoxApiResponse, ProxmoxConnection, ProxmoxCredentials, ProxmoxTaskStatus, SnapshotResource, StorageResource } from './proxmoxTypes';
-import * as https from 'node:https';
+import { ClusterResource, PollingConfig, PollingProgressCallback, ProxmoxApiResponse, ProxmoxConnection, ProxmoxCredentials, ProxmoxTaskStatus, SnapshotResource, StorageResource } from './proxmoxTypes';
 import { X509Certificate } from 'node:crypto';
 import { isIP } from 'node:net';
 import * as tls from 'node:tls';
@@ -8,6 +7,17 @@ import { TLSSocket } from 'node:tls';
 const requestTimeoutMs = 10000;
 const maxResponseBytes = 10 * 1024 * 1024;
 const maxTaskWaitMs = 5 * 60 * 1000;
+
+/**
+ * Default polling configuration for task operations.
+ * Provides sensible defaults for different polling scenarios.
+ */
+const defaultPollingConfig: Required<PollingConfig> = {
+  initialIntervalMs: 500, // Start with 500ms for general operations
+  maxIntervalMs: 30000, // Cap at 30s with exponential backoff
+  containerIntervalMs: 3000, // Use 3s interval for container-specific operations
+  maxWaitMs: maxTaskWaitMs // 5 minute timeout
+};
 
 export class ProxmoxApiError extends Error {
   constructor(
@@ -38,6 +48,7 @@ export class ProxmoxClient {
     if (credentials.tokenSecret.trim() === '') {
       throw new ProxmoxApiError('Proxmox API token secret is missing.');
     }
+    // eslint-disable-next-line no-control-regex
     if (/[\x00-\x1f\x7f]/.test(credentials.tokenSecret)) {
       throw new ProxmoxApiError('Proxmox API token secret contains invalid control characters.');
     }
@@ -86,6 +97,16 @@ export class ProxmoxClient {
     });
   }
 
+  getGuestConfig(type: 'lxc' | 'qemu', node: string, vmid: number, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const normalizedNode = validateGuestArguments(node, vmid);
+    return this.get<Record<string, unknown>>(`/nodes/${encodeURIComponent(normalizedNode)}/${type}/${vmid}/config`, signal).then((config) => {
+      if (typeof config !== 'object' || config === null) {
+        throw new ProxmoxApiError('Proxmox returned an invalid guest configuration.');
+      }
+      return config;
+    });
+  }
+
   startGuest(type: 'lxc' | 'qemu', node: string, vmid: number, signal?: AbortSignal): Promise<string> {
     const normalizedNode = validateGuestArguments(node, vmid);
     return this.post<unknown>(`/nodes/${encodeURIComponent(normalizedNode)}/${type}/${vmid}/status/start`, signal).then(requireTaskId);
@@ -96,18 +117,42 @@ export class ProxmoxClient {
     return this.post<unknown>(`/nodes/${encodeURIComponent(normalizedNode)}/${type}/${vmid}/status/stop`, signal).then(requireTaskId);
   }
 
-  async waitForTask(node: string, upid: string, signal?: AbortSignal, taskWaitMs = maxTaskWaitMs): Promise<void> {
+  /**
+   * Poll a Proxmox task with progress callback support and configurable polling intervals.
+   * Implements exponential backoff: starts at initialIntervalMs and increases up to maxIntervalMs.
+   *
+   * @param node - Node name
+   * @param upid - Unique task ID returned by start/stop operations
+   * @param onProgress - Optional callback for polling progress updates
+   * @param config - Optional polling configuration (uses defaults if not provided)
+   * @param signal - Optional AbortSignal for cancellation
+   * @throws ProxmoxApiError if task fails or polling times out
+   */
+  async pollTaskWithProgress(
+    node: string,
+    upid: string,
+    onProgress?: PollingProgressCallback,
+    config?: PollingConfig,
+    signal?: AbortSignal
+  ): Promise<void> {
     const normalizedNode = requireNodeName(node);
     const normalizedUpid = requireUpid(upid);
-    if (!Number.isFinite(taskWaitMs) || taskWaitMs <= 0) {
-      throw new ProxmoxApiError('Proxmox task wait deadline must be greater than zero.');
+    const pollingConfig = { ...defaultPollingConfig, ...config };
+
+    if (!Number.isFinite(pollingConfig.maxWaitMs) || pollingConfig.maxWaitMs <= 0) {
+      throw new ProxmoxApiError('Polling max wait deadline must be greater than zero.');
     }
-    const deadline = Date.now() + taskWaitMs;
+
+    const deadline = Date.now() + pollingConfig.maxWaitMs;
     const deadlineController = new AbortController();
-    const deadlineTimer = setTimeout(() => deadlineController.abort(), Math.max(0, taskWaitMs));
+    const deadlineTimer = setTimeout(() => deadlineController.abort(), Math.max(0, pollingConfig.maxWaitMs));
     const abortDeadline = () => deadlineController.abort();
     signal?.addEventListener('abort', abortDeadline, { once: true });
+
+    let currentInterval = pollingConfig.initialIntervalMs;
+
     try {
+      onProgress?.('polling');
       for (;;) {
         let status: ProxmoxTaskStatus;
         try {
@@ -121,37 +166,51 @@ export class ProxmoxClient {
           }
           throw error;
         }
-      if (!isProxmoxTaskStatus(status)) {
-        throw new ProxmoxApiError('Proxmox returned an invalid task status.');
-      }
-      if (status.status === 'stopped') {
-        if (typeof status.exitstatus !== 'string') {
+
+        if (!isProxmoxTaskStatus(status)) {
           throw new ProxmoxApiError('Proxmox returned an invalid task status.');
         }
-        if (status.exitstatus !== 'OK') {
-          throw new ProxmoxApiError(`Proxmox task failed: ${this.redact(status.exitstatus)}`);
+
+        if (status.status === 'stopped') {
+          if (typeof status.exitstatus !== 'string') {
+            throw new ProxmoxApiError('Proxmox returned an invalid task status.');
+          }
+          if (status.exitstatus !== 'OK') {
+            onProgress?.('failed');
+            throw new ProxmoxApiError(`Proxmox task failed: ${this.redact(status.exitstatus)}`);
+          }
+          onProgress?.('stopped');
+          return;
         }
-        return;
-      }
-      if (status.status !== 'running') {
-        throw new ProxmoxApiError('Proxmox returned an invalid task status.');
-      }
-      if (Date.now() >= deadline) {
-        throw new ProxmoxApiError('Proxmox task polling timed out.');
-      }
-      try {
-        await delay(500, deadlineController.signal);
-      } catch (error) {
-        if (Date.now() >= deadline && !signal?.aborted) {
+
+        if (status.status !== 'running') {
+          throw new ProxmoxApiError('Proxmox returned an invalid task status.');
+        }
+
+        if (Date.now() >= deadline) {
           throw new ProxmoxApiError('Proxmox task polling timed out.');
         }
-        throw error;
-      }
+
+        // Exponential backoff: increase interval but cap at maxIntervalMs
+        try {
+          await delay(currentInterval, deadlineController.signal);
+          currentInterval = Math.min(currentInterval * 1.5, pollingConfig.maxIntervalMs);
+        } catch (error) {
+          if (Date.now() >= deadline && !signal?.aborted) {
+            throw new ProxmoxApiError('Proxmox task polling timed out.');
+          }
+          throw error;
+        }
       }
     } finally {
       clearTimeout(deadlineTimer);
       signal?.removeEventListener('abort', abortDeadline);
     }
+  }
+
+  async waitForTask(node: string, upid: string, signal?: AbortSignal, taskWaitMs = maxTaskWaitMs): Promise<void> {
+    // Use pollTaskWithProgress with default config for backward compatibility
+    return this.pollTaskWithProgress(node, upid, undefined, { maxWaitMs: taskWaitMs }, signal);
   }
 
   private post<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -259,6 +318,7 @@ export class ProxmoxClient {
   private getWithPinnedCertificate(url: string, signal: AbortSignal, method: 'GET' | 'POST' = 'GET'): Promise<Response> {
     return new Promise((resolve, reject) => {
       let settled = false;
+      // eslint-disable-next-line prefer-const
       let socket: TLSSocket | undefined;
       const trustedFingerprint = normalizeCertificateFingerprint(this.connection.certificateFingerprint);
       if (trustedFingerprint === undefined) {
@@ -406,6 +466,8 @@ function isStorageResource(value: unknown): value is StorageResource {
     && value.type.trim() !== ''
     && hasValidNumericFields(value, ['used', 'avail', 'total', 'active']);
 }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _isStorageResource = isStorageResource;
 
 function normalizeStorageResource(value: unknown): StorageResource | undefined {
   if (!isRecord(value) || typeof value.storage !== 'string' || value.storage.trim() === '') {

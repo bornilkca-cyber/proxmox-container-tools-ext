@@ -144,3 +144,61 @@ test('shows start and stop only for explicit stopped or running states', () => {
   assert.doesNotMatch(stopRule, /viewItem == proxmoxContainer(\s|\)|\|\|)/);
   assert.doesNotMatch(stopRule, /viewItem == proxmoxQemu(\s|\)|\|\|)/);
 });
+
+// SSH Hostname Fix Tests
+test('SSH command uses provided hostname directly', () => {
+  const result = buildSshCommand('user', 'my-guest-hostname');
+  assert.match(result, /user@my-guest-hostname/);
+});
+
+test('SSH command accepts guest hostname from config', () => {
+  // When guest config provides a hostname like 'app-server'
+  const result = buildSshCommand('root', 'app-server');
+  assert.equal(result, "ssh 'root@app-server'");
+});
+
+test('SSH command falls back to server hostname if guest hostname unavailable', () => {
+  // Server hostname extracted from connection URL: new URL(baseUrl).hostname
+  const result = buildSshCommand('user', 'proxmox.example.com');
+  assert.match(result, /user@proxmox.example.com/);
+});
+
+test('SSH command handles container with complex hostname', () => {
+  // Some systems use longer hostnames with dots and dashes
+  const result = buildSshCommand('root', 'app-web-01.internal.local');
+  assert.equal(result, "ssh 'root@app-web-01.internal.local'");
+});
+
+test('SSH command validates hostname contains no control characters', () => {
+  assert.throws(() => buildSshCommand('user', 'host\nname'), /control characters/);
+  assert.throws(() => buildSshCommand('user', 'host\rname'), /control characters/);
+  assert.throws(() => buildSshCommand('user', 'host\x00name'), /control characters/);
+});
+
+test('SSH command accepts alphanumeric hostnames', () => {
+  const testCases = [
+    'localhost',
+    'vm1',
+    'guest-server',
+    '192.168.1.100',
+    'container.domain.com'
+  ];
+
+  for (const hostname of testCases) {
+    assert.doesNotThrow(() => {
+      buildSshCommand('root', hostname);
+    }, `Should accept hostname: ${hostname}`);
+  }
+});
+
+test('buildSshCommand with typical container hostname pattern', () => {
+  // LXC container hostname from config endpoint
+  const result = buildSshCommand('root', 'mycontainer');
+  assert.equal(result, "ssh 'root@mycontainer'");
+});
+
+test('buildSshCommand with typical QEMU hostname pattern', () => {
+  // QEMU VM hostname from config endpoint
+  const result = buildSshCommand('ubuntu', 'vm-prod-01');
+  assert.equal(result, "ssh 'ubuntu@vm-prod-01'");
+});

@@ -138,10 +138,16 @@ function setupClusterHandlers() {
   FakeProxmoxService.handlers.loadStorage = async () => [];
 }
 
-async function getGuestItem(provider) {
+async function getConnectionItems(provider) {
   const rootItems = await provider.getChildren();
-  const nodeItems = await provider.getChildren(rootItems[0]);
-  const children = await provider.getChildren(nodeItems[0]);
+  assert.equal(rootItems.length, 1, 'Expected exactly one root item');
+  return provider.getChildren(rootItems[0]); // RootItem -> Connections
+}
+
+async function getGuestItem(provider) {
+  const connectionItems = await getConnectionItems(provider);
+  const nodeItems = await provider.getChildren(connectionItems[0]); // Connection -> Nodes
+  const children = await provider.getChildren(nodeItems[0]); // Node -> Guests
   return children.find((item) => typeof item.id === 'string' && item.id.startsWith('guest:'));
 }
 
@@ -227,7 +233,7 @@ test('encodes node, guest, and storage ID components', async () => {
   const { store } = createConnectionStore({ connections: [connection] });
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodeItems = await provider.getChildren(rootItems[0]);
     const children = await provider.getChildren(nodeItems[0]);
 
@@ -270,7 +276,7 @@ test('does not clear another connection storage cache during refresh', async () 
   const { store } = createConnectionStore({ connections: [connectionA, connectionB] });
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const connectionItemA = rootItems.find((item) => item.id === connectionA.id);
     const connectionItemB = rootItems.find((item) => item.id === connectionB.id);
     const nodeItemsA = await provider.getChildren(connectionItemA);
@@ -299,7 +305,7 @@ test('sorts guest names in natural numeric order', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodes = await provider.getChildren(rootItems[0]);
     const children = await provider.getChildren(nodes[0]);
     assert.deepEqual(children.filter((item) => item.resource).map((item) => item.label), ['vm-2', 'vm-10']);
@@ -319,7 +325,7 @@ test('deduplicates duplicate guest resources', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodes = await provider.getChildren(rootItems[0]);
     const children = await provider.getChildren(nodes[0]);
     const guests = children.filter((item) => item.resource);
@@ -335,7 +341,7 @@ test('shows an empty-state message when a connection has no nodes', async () => 
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const children = await provider.getChildren(rootItems[0]);
     assert.equal(children.length, 1);
     assert.equal(children[0].label, 'No Proxmox nodes found.');
@@ -353,7 +359,7 @@ test('excludes guests without a valid node from the tree', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodes = await provider.getChildren(rootItems[0]);
     assert.deepEqual(nodes.map((item) => item.label), ['node-a']);
   } finally {
@@ -370,7 +376,7 @@ test('shows an empty-state message when a node has no guests or storage', async 
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodes = await provider.getChildren(rootItems[0]);
     const children = await provider.getChildren(nodes[0]);
     assert.equal(children.length, 1);
@@ -441,7 +447,7 @@ test('stale node inventory requests do not render outdated tree data', async () 
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const connectionItem = rootItems[0];
 
     const staleRequest = provider.getChildren(connectionItem);
@@ -481,7 +487,7 @@ test('concurrent connection expands reuse one inventory request', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const connectionItem = rootItems[0];
 
     const first = provider.getChildren(connectionItem);
@@ -520,7 +526,7 @@ test('sequential connection expands reuse cached inventory until refresh', async
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const connectionItem = rootItems[0];
 
     const firstNodes = await provider.getChildren(connectionItem);
@@ -550,7 +556,7 @@ test('retries transient storage failures once', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const connectionItem = rootItems[0];
     const nodeItems = await provider.getChildren(connectionItem);
     const nodeItem = nodeItems[0];
@@ -578,7 +584,7 @@ test('hides non-transient storage failures when guests are available', async () 
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const connectionItem = rootItems[0];
     const nodeItems = await provider.getChildren(connectionItem);
     const nodeItem = nodeItems[0];
@@ -605,7 +611,7 @@ test('shows a storage load diagnostic only when no guests are available', async 
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodeItems = await provider.getChildren(rootItems[0]);
     const children = await provider.getChildren(nodeItems[0]);
 
@@ -626,7 +632,7 @@ test('does not render the legacy storage unavailable text for transient failures
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodeItems = await provider.getChildren(rootItems[0]);
     const children = await provider.getChildren(nodeItems[0]);
 
@@ -651,7 +657,7 @@ test('concurrent node expands reuse one storage request', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const connectionItem = rootItems[0];
     const nodeItems = await provider.getChildren(connectionItem);
     const nodeItem = nodeItems[0];
@@ -691,7 +697,7 @@ test('stale storage responses do not overwrite refreshed node storage data', asy
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const connectionItem = rootItems[0];
     const nodeItems = await provider.getChildren(connectionItem);
     const nodeItem = nodeItems[0];
@@ -763,7 +769,7 @@ test('sequential expand-refresh-expand stays fresh across connections', async ()
   const { store } = createConnectionStore({ connections: [connectionA, connectionB] });
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const firstConnection = rootItems.find((item) => item.id === 'connection-a');
     const secondConnection = rootItems.find((item) => item.id === 'connection-b');
     assert.ok(firstConnection, 'Expected connection-a tree item.');
@@ -803,7 +809,7 @@ test('does not return pending inventory results after disposal', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const request = provider.getChildren(rootItems[0]);
     await flushAsyncWork();
     provider.dispose();
@@ -823,7 +829,7 @@ test('sorts node names in natural numeric order', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodes = await provider.getChildren(rootItems[0]);
     assert.deepEqual(nodes.map((item) => item.label), ['node-2', 'node-10']);
   } finally {
@@ -840,7 +846,7 @@ test('sorts storage names in natural numeric order', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodes = await provider.getChildren(rootItems[0]);
     const children = await provider.getChildren(nodes[0]);
     assert.deepEqual(children.filter((item) => item.storage).map((item) => item.label), ['storage-2', 'storage-10']);
@@ -870,7 +876,9 @@ test('shows an actionable message when there are no connections', async () => {
   const { store } = createConnectionStore({ connections: [] });
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const items = await provider.getChildren();
+    const rootItems = await provider.getChildren();
+    assert.equal(rootItems.length, 1, 'Expected one root item');
+    const items = await provider.getChildren(rootItems[0]);
     assert.equal(items.length, 1);
     assert.equal(items[0].command.command, 'proxmox.addConnection');
   } finally {
@@ -887,7 +895,7 @@ test('includes running guest counts in node descriptions', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodes = await provider.getChildren(rootItems[0]);
     assert.equal(nodes[0].description, '2 guests (1 running)');
   } finally {
@@ -901,11 +909,215 @@ test('returns no children for a storage or message tree item', async () => {
   const { store } = createConnectionStore();
   const provider = new ProxmoxExplorerProvider(store, new Set());
   try {
-    const rootItems = await provider.getChildren();
+    const rootItems = await getConnectionItems(provider);
     const nodes = await provider.getChildren(rootItems[0]);
     const children = await provider.getChildren(nodes[0]);
     const storage = children.find((item) => item.storage);
     assert.deepEqual(await provider.getChildren(storage), []);
+  } finally {
+    provider.dispose();
+  }
+});
+
+// ============================================================================
+// Root Tree Browser Feature Tests (Phase 2)
+// ============================================================================
+
+test('returns root item as top-level tree element', async () => {
+  const { store } = createConnectionStore();
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    assert.equal(rootItems.length, 1, 'Expected exactly one root item');
+    assert.equal(rootItems[0].label, 'Proxmox Servers');
+    assert.equal(rootItems[0].id, 'proxmox-root');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('root item has correct properties and accessibility info', async () => {
+  const { store } = createConnectionStore();
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    const rootItem = rootItems[0];
+    assert.equal(rootItem.contextValue, 'proxmoxRoot');
+    assert.ok(rootItem.tooltip, 'Expected tooltip on root item');
+    assert.ok(rootItem.accessibilityInformation, 'Expected accessibility info');
+    assert.equal(rootItem.collapsibleState, 1); // Collapsed
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('returns connections as children of root item', async () => {
+  const connection = {
+    id: 'test-server',
+    name: 'Test Server',
+    baseUrl: 'https://test.local:8006',
+    username: 'root@pam',
+    realm: 'pam'
+  };
+  const { store } = createConnectionStore({ connections: [connection] });
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    const connectionItems = await provider.getChildren(rootItems[0]);
+    assert.equal(connectionItems.length, 1);
+    assert.equal(connectionItems[0].id, 'test-server');
+    assert.equal(connectionItems[0].label, 'Test Server');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('returns message item when root has no connections', async () => {
+  const { store } = createConnectionStore({ connections: [] });
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    const items = await provider.getChildren(rootItems[0]);
+    assert.equal(items.length, 1);
+    assert.ok(items[0].command, 'Expected message item with command');
+    assert.equal(items[0].command.command, 'proxmox.addConnection');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('getParent returns root for connection items', async () => {
+  const connection = {
+    id: 'test-server',
+    name: 'Test Server',
+    baseUrl: 'https://test.local:8006',
+    username: 'root@pam',
+    realm: 'pam'
+  };
+  const { store } = createConnectionStore({ connections: [connection] });
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    const connectionItems = await provider.getChildren(rootItems[0]);
+    const parent = provider.getParent(connectionItems[0]);
+    assert.ok(parent, 'Expected parent for connection item');
+    assert.equal(parent.id, 'proxmox-root');
+    assert.equal(parent.label, 'Proxmox Servers');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('getParent returns undefined for root item', async () => {
+  const { store } = createConnectionStore();
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    const parent = provider.getParent(rootItems[0]);
+    assert.equal(parent, undefined, 'Expected no parent for root item');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('multiple root item instances have same id for tree tracking', async () => {
+  const { store } = createConnectionStore();
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems1 = await provider.getChildren();
+    const rootItems2 = await provider.getChildren();
+    assert.equal(rootItems1[0].id, rootItems2[0].id);
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('root item maintains tree structure with multiple connections', async () => {
+  const connections = [
+    { id: 'srv-a', name: 'Server A', baseUrl: 'https://a.local:8006', username: 'root@pam', realm: 'pam' },
+    { id: 'srv-b', name: 'Server B', baseUrl: 'https://b.local:8006', username: 'root@pam', realm: 'pam' },
+    { id: 'srv-c', name: 'Server C', baseUrl: 'https://c.local:8006', username: 'root@pam', realm: 'pam' }
+  ];
+  const { store } = createConnectionStore({ connections });
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    assert.equal(rootItems.length, 1, 'Expected one root item');
+    const connectionItems = await provider.getChildren(rootItems[0]);
+    assert.equal(connectionItems.length, 3, 'Expected three connections');
+    connectionItems.forEach((item, index) => {
+      assert.equal(item.id, connections[index].id);
+    });
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('disposed provider returns empty array from getChildren', async () => {
+  const { store } = createConnectionStore();
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  provider.dispose();
+  const items = await provider.getChildren();
+  assert.deepEqual(items, [], 'Expected empty array from disposed provider');
+});
+
+test('disposed provider returns undefined from getParent', async () => {
+  const { store } = createConnectionStore();
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  const rootItems = await provider.getChildren();
+  provider.dispose();
+  const parent = provider.getParent(rootItems[0]);
+  assert.equal(parent, undefined, 'Expected undefined from disposed provider');
+});
+
+test('root item icon is server-environment theme icon', async () => {
+  const { store } = createConnectionStore();
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    const rootItem = rootItems[0];
+    assert.ok(rootItem.iconPath, 'Expected iconPath on root item');
+    // Theme icons have a constructor that identifies them
+    assert.equal(rootItem.iconPath.id, 'server-environment');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('root item context value enables correct menu contributions', async () => {
+  const { store } = createConnectionStore();
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    const rootItem = rootItems[0];
+    // Context value should match package.json menu contribution rules
+    assert.equal(rootItem.contextValue, 'proxmoxRoot');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('connection parent reference remains consistent across getChildren calls', async () => {
+  const connection = {
+    id: 'test-server',
+    name: 'Test Server',
+    baseUrl: 'https://test.local:8006',
+    username: 'root@pam',
+    realm: 'pam'
+  };
+  const { store } = createConnectionStore({ connections: [connection] });
+  const provider = new ProxmoxExplorerProvider(store, new Set());
+  try {
+    const rootItems = await provider.getChildren();
+    const connectionItems = await provider.getChildren(rootItems[0]);
+    const parent = provider.getParent(connectionItems[0]);
+
+    // Get the root again and verify parent is still consistent
+    const rootItems2 = await provider.getChildren();
+    const parent2 = provider.getParent(connectionItems[0]);
+
+    // IDs should match (may be different instances due to new RootItem() calls)
+    assert.equal(parent.id, parent2.id);
   } finally {
     provider.dispose();
   }

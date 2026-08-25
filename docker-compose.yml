@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: proxmox-ext-test
+    volumes:
+      - .:/workspace
+      - /workspace/node_modules
+    environment:
+      NODE_ENV: test
+    command: npm test
+
+  coverage:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: proxmox-ext-coverage
+    volumes:
+      - .:/workspace
+      - /workspace/node_modules
+    environment:
+      NODE_ENV: test
+    command: npm run test:coverage
+
+  lint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: proxmox-ext-lint
+    volumes:
+      - .:/workspace
+      - /workspace/node_modules
+    environment:
+      NODE_ENV: test
+    command: npm run compile
+
+  package:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: proxmox-ext-package
+    volumes:
+      - .:/workspace
+      - /workspace/node_modules
+    environment:
+      NODE_ENV: production
+    command: npm run package

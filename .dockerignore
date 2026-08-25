@@ -1,0 +1,16 @@
+node_modules
+.DS_Store
+*.vsix
+out
+coverage
+.nyc_output
+dist
+build
+*.log
+.git
+.gitignore
+.github
+.vscode-test
+test
+*.ts
+tsconfig.json

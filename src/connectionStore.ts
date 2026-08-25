@@ -49,6 +49,7 @@ export class ConnectionStore {
           } else {
             await this.context.secrets.store(secretKey, previousTokenSecret);
           }
+          // eslint-disable-next-line no-empty
         } catch {
         }
         throw error;
@@ -83,6 +84,7 @@ export class ConnectionStore {
       } catch (error) {
         try {
           await this.context.globalState.update(connectionsKey, connections);
+          // eslint-disable-next-line no-empty
         } catch {
         }
         throw error;

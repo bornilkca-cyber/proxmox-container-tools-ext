@@ -4,7 +4,14 @@ import { ProxmoxService } from './proxmoxService';
 import { ClusterResource, ProxmoxConnection, SnapshotResource, StorageResource } from './proxmoxTypes';
 import { guestActionKey, guestContextValue } from './shellAccess';
 
-type ProxmoxItem = ConnectionItem | NodeItem | GuestItem | SnapshotItem | StorageItem | MessageItem;
+type ProxmoxItem = RootItem | ConnectionItem | NodeItem | GuestItem | SnapshotItem | StorageItem | MessageItem;
+type PollingState = {
+  readonly vmid: number;
+  readonly type: string;
+  readonly connectionId: string;
+  readonly phase: 'polling' | 'stopped' | 'failed';
+  readonly startTime: number;
+};
 const inventoryRefreshIntervalMs = 60_000;
 type ResourceRequestState = {
   version: number;
@@ -18,6 +25,20 @@ type SnapshotRequestState = {
   version: number;
   request: Promise<readonly SnapshotResource[]>;
 };
+
+class RootItem extends vscode.TreeItem {
+  constructor() {
+    super('Proxmox Servers', vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = 'proxmox-root';
+    this.iconPath = new vscode.ThemeIcon('server-environment');
+    this.contextValue = 'proxmoxRoot';
+    this.tooltip = 'Proxmox connection list - right-click a connection to open web UI';
+    this.accessibilityInformation = {
+      label: 'Proxmox Servers, connection list root',
+      role: 'treeitem'
+    };
+  }
+}
 
 class ConnectionItem extends vscode.TreeItem {
   constructor(readonly connection: ProxmoxConnection) {
@@ -85,21 +106,49 @@ class GuestItem extends vscode.TreeItem {
   constructor(
     readonly connection: ProxmoxConnection,
     resource: ClusterResource,
-    inFlightGuestActions: ReadonlySet<string>
+    inFlightGuestActions: ReadonlySet<string>,
+    pollingState?: PollingState
   ) {
     const label = resource.name ?? `${resource.type} ${resource.vmid ?? ''}`.trim();
     super(label, vscode.TreeItemCollapsibleState.Collapsed);
     this.resource = resource;
     this.id = treeItemId('guest', connection.id, resource.id);
-    const busy = resource.vmid !== undefined
+
+    // Determine if guest is busy (either from in-flight actions or polling state)
+    const isBusyFromActions = resource.vmid !== undefined
       && inFlightGuestActions.has(guestActionKey(connection.id, resource.type, resource.vmid));
-    this.iconPath = guestIcon(resource.type, busy ? 'starting' : resource.status);
+    const isBusyFromPolling = pollingState !== undefined && pollingState.phase === 'polling';
+    const busy = isBusyFromActions || isBusyFromPolling;
+
+    // Determine icon based on status and polling phase
+    let status = resource.status;
+    if (pollingState !== undefined) {
+      // Show "starting" phase if polling
+      if (pollingState.phase === 'polling') {
+        status = 'starting';
+      } else if (pollingState.phase === 'failed') {
+        status = 'error';
+      }
+    }
+
+    this.iconPath = guestIcon(resource.type, busy ? 'starting' : status);
     this.contextValue = busy ? `${resource.type === 'qemu' ? 'proxmoxQemu' : 'proxmoxContainer'}:busy`
       : guestContextValue(resource.type, resource.status);
-    this.description = [busy ? 'Operation in progress' : guestCpuSummary(resource), resource.vmid === undefined ? undefined : `VMID ${resource.vmid}`]
+
+    // Update description to show operation status
+    const operationStatus = pollingState?.phase === 'polling'
+      ? 'Stopping...'
+      : pollingState?.phase === 'failed'
+        ? 'Operation failed'
+        : busy
+          ? 'Operation in progress'
+          : guestCpuSummary(resource);
+
+    this.description = [operationStatus, resource.vmid === undefined ? undefined : `VMID ${resource.vmid}`]
       .filter(Boolean)
       .join(' | ');
-    this.tooltip = formatGuestTooltip(resource);
+
+    this.tooltip = formatGuestTooltip(resource, pollingState);
     const accessibleStatus = busy ? 'Operation in progress' : resource.status;
     this.accessibilityInformation = {
       label: `${label}${accessibleStatus === undefined ? '' : `, ${accessibleStatus}`}`,
@@ -132,6 +181,7 @@ export class ProxmoxExplorerProvider implements vscode.TreeDataProvider<ProxmoxI
   private readonly storageRequests = new Map<string, StorageRequestState>();
   private readonly snapshotCache = new Map<string, readonly SnapshotResource[]>();
   private readonly snapshotRequests = new Map<string, SnapshotRequestState>();
+  private readonly pollingStates = new Map<string, PollingState>();
   private readonly inventoryRefreshTimer: NodeJS.Timeout;
   private disposed = false;
 
@@ -196,10 +246,44 @@ export class ProxmoxExplorerProvider implements vscode.TreeDataProvider<ProxmoxI
     this.storageRequests.clear();
     this.snapshotCache.clear();
     this.snapshotRequests.clear();
+    this.pollingStates.clear();
   }
 
   getTreeItem(element: ProxmoxItem): vscode.TreeItem {
     return element;
+  }
+
+  /**
+   * Handle polling progress updates from service operations.
+   * Updates tree UI to show polling status.
+   */
+  onPollingProgress(connectionId: string, type: string, vmid: number, phase: 'polling' | 'stopped' | 'failed'): void {
+    if (this.disposed) {
+      return;
+    }
+
+    const key = this.pollingStateKey(connectionId, type, vmid);
+
+    if (phase === 'polling') {
+      // Start tracking this operation
+      this.pollingStates.set(key, {
+        vmid,
+        type,
+        connectionId,
+        phase,
+        startTime: Date.now()
+      });
+    } else {
+      // Operation completed - remove from tracking
+      this.pollingStates.delete(key);
+    }
+
+    // Refresh the tree to update visual indicators
+    this.refreshEvent.fire();
+  }
+
+  private pollingStateKey(connectionId: string, type: string, vmid: number): string {
+    return `${connectionId}:${type}:${vmid}`;
   }
 
   async getChildren(element?: ProxmoxItem): Promise<ProxmoxItem[]> {
@@ -207,6 +291,12 @@ export class ProxmoxExplorerProvider implements vscode.TreeDataProvider<ProxmoxI
       return [];
     }
     if (element === undefined) {
+      // Return root item as top-level
+      return [new RootItem()];
+    }
+
+    if (element instanceof RootItem) {
+      // Return all connections as children of root
       const connections = this.connectionStore.getConnections();
       return connections.length === 0
         ? [new MessageItem('Add a Proxmox connection to get started.', true)]
@@ -228,8 +318,28 @@ export class ProxmoxExplorerProvider implements vscode.TreeDataProvider<ProxmoxI
     return [];
   }
 
+  getParent(element: ProxmoxItem): ProxmoxItem | undefined {
+    // Return root as parent of connections
+    if (element instanceof ConnectionItem) {
+      return new RootItem();
+    }
+
+    // RootItem has no parent
+    if (element instanceof RootItem) {
+      return undefined;
+    }
+
+    // Default: no parent
+    return undefined;
+  }
+
   private async loadNodeChildren(node: NodeItem): Promise<ProxmoxItem[]> {
-    const guestItems = node.resources.map((resource) => new GuestItem(node.connection, resource, this.inFlightGuestActions));
+    const guestItems = node.resources.map((resource) => {
+      const pollingState = resource.vmid !== undefined
+        ? this.pollingStates.get(this.pollingStateKey(node.connection.id, resource.type, resource.vmid))
+        : undefined;
+      return new GuestItem(node.connection, resource, this.inFlightGuestActions, pollingState);
+    });
     let credentials;
     try {
       credentials = await this.connectionStore.getCredentials(node.connection);
@@ -548,10 +658,11 @@ function nodeGuestSummary(resources: readonly ClusterResource[]): string {
   return running > 0 ? `${guestLabel} (${running} running)` : guestLabel;
 }
 
-function formatGuestTooltip(resource: ClusterResource): string {
+function formatGuestTooltip(resource: ClusterResource, pollingState?: PollingState): string {
   const details = [
     resource.name,
-    resource.status === undefined ? undefined : `Status: ${resource.status}`,
+    pollingState?.phase === 'polling' ? 'Status: Polling for completion...' : resource.status === undefined ? undefined : `Status: ${resource.status}`,
+    pollingState?.phase === 'failed' ? 'Status: Operation failed' : undefined,
     resource.cpu === undefined || resource.maxcpu === undefined ? undefined : `CPU: ${resource.cpu}/${resource.maxcpu}`,
     resource.mem === undefined || resource.maxmem === undefined
       ? undefined
@@ -569,7 +680,7 @@ function guestIcon(type: string, status?: string): vscode.ThemeIcon {
       ? new vscode.ThemeColor('disabledForeground')
       : status === 'starting' || status === 'stopping'
         ? new vscode.ThemeColor('charts.yellow')
-      : undefined;
+        : undefined;
   return new vscode.ThemeIcon(icon, color);
 }
 
