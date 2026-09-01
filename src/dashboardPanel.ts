@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ClusterResource, GuestDetailInfo } from './proxmoxTypes';
+import { escapeHtml, formatBytes, formatUptimeFull, getEmptyStateHtml, getStatusColor, toInlineScriptJson } from './webviewCommon';
 
 /**
  * Resource metric for dashboard visualization.
@@ -119,82 +120,21 @@ export class DashboardPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private getEmptyHtml(): string {
-    return `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <style>
-          body {
-            font-family: var(--vscode-font-family);
-            color: var(--vscode-foreground);
-            background-color: var(--vscode-editor-background);
-            margin: 0;
-            padding: 20px;
-          }
-          .empty-state {
-            text-align: center;
-            color: var(--vscode-descriptionForeground);
-            margin-top: 40px;
-          }
-          .empty-state h2 {
-            margin: 0 0 10px 0;
-            font-size: 16px;
-            font-weight: 500;
-          }
-          .empty-state p {
-            margin: 0;
-            font-size: 13px;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="empty-state">
-          <h2>No Guest Selected</h2>
-          <p>Select a QEMU VM or LXC container to view dashboard</p>
-        </div>
-      </body>
-      </html>
-    `;
+    return getEmptyStateHtml('Select a QEMU VM or LXC container to view dashboard');
   }
 
   private getDashboardHtml(guest: GuestDetailInfo & { resource: ClusterResource }): string {
-    const formatBytes = (bytes?: number): string => {
-      if (bytes === undefined) {
-        return 'N/A';
-      }
-      if (bytes === 0) {
-        return '0 B';
-      }
-      const units = ['B', 'KB', 'MB', 'GB'];
-      let size = bytes;
-      let unitIndex = 0;
-      while (size >= 1024 && unitIndex < units.length - 1) {
-        size /= 1024;
-        unitIndex++;
-      }
-      return `${size.toFixed(1)} ${units[unitIndex]}`;
-    };
-
-    const formatUptime = (seconds?: number): string => {
-      if (seconds === undefined) {
-        return 'N/A';
-      }
-      const days = Math.floor(seconds / 86400);
-      const hours = Math.floor((seconds % 86400) / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      return `${days}d ${hours}h ${minutes}m`;
-    };
+    const formatUptime = formatUptimeFull;
 
     const cpuPercent = guest.resource.cpu !== undefined ? (guest.resource.cpu * 100).toFixed(1) : 'N/A';
     const memoryPercent = guest.resource.mem !== undefined && guest.resource.maxmem !== undefined && guest.resource.maxmem > 0
       ? ((guest.resource.mem / guest.resource.maxmem) * 100).toFixed(1)
       : 'N/A';
     const status = guest.resource.status ?? 'unknown';
-    const statusColor = status === 'running' ? '#51cf66' : status === 'stopped' ? '#ff6b6b' : '#ffd43b';
+    const statusColor = getStatusColor(status);
 
-    const metricsJson = this.escapeHtml(JSON.stringify(this.metrics));
-    const guestNameEscaped = this.escapeHtml(guest.resource.name ?? `VM ${guest.vmid}`);
+    const metricsJson = toInlineScriptJson(this.metrics);
+    const guestNameEscaped = escapeHtml(guest.resource.name ?? `VM ${guest.vmid}`);
 
     return `
       <!DOCTYPE html>
@@ -322,7 +262,7 @@ export class DashboardPanelProvider implements vscode.WebviewViewProvider {
         <div class="dashboard">
           <div class="header">
             <h2>${guestNameEscaped}</h2>
-            <span class="status-badge">${this.escapeHtml(status)}</span>
+            <span class="status-badge">${escapeHtml(status)}</span>
           </div>
 
           <div class="metrics-grid">
@@ -353,16 +293,8 @@ export class DashboardPanelProvider implements vscode.WebviewViewProvider {
               <div class="info-value">${formatUptime(guest.uptime)}</div>
             </div>
             <div class="info-item">
-              <div class="info-label">Node</div>
-              <div class="info-value">${this.escapeHtml(guest.node)}</div>
-            </div>
-            <div class="info-item">
               <div class="info-label">RAM</div>
               <div class="info-value">${formatBytes(guest.resource.mem)} / ${formatBytes(guest.resource.maxmem)}</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">Cores</div>
-              <div class="info-value">${guest.resource.maxcpu ?? 'N/A'}</div>
             </div>
           </div>
         </div>
@@ -437,10 +369,12 @@ export class DashboardPanelProvider implements vscode.WebviewViewProvider {
                     min: 0,
                     max: 100,
                     ticks: {
+                      stepSize: 20,
                       font: { size: 10 }
                     },
                     grid: {
-                      drawBorder: false
+                      drawBorder: false,
+                      color: 'rgba(128, 128, 128, 0.25)'
                     }
                   },
                   x: {
@@ -449,7 +383,8 @@ export class DashboardPanelProvider implements vscode.WebviewViewProvider {
                     },
                     grid: {
                       drawBorder: false,
-                      display: false
+                      display: true,
+                      color: 'rgba(128, 128, 128, 0.12)'
                     }
                   }
                 }
@@ -460,16 +395,5 @@ export class DashboardPanelProvider implements vscode.WebviewViewProvider {
       </body>
       </html>
     `;
-  }
-
-  private escapeHtml(text: string): string {
-    const map: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#039;'
-    };
-    return text.replace(/[&<>"']/g, (m) => map[m]);
   }
 }

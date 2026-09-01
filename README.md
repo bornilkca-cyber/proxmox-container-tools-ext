@@ -2,7 +2,7 @@
 
 Manage Proxmox VE servers, QEMU virtual machines, and LXC containers from VS Code.
 
-> **Project status:** Early MVP. The current build provides secure connection management, Proxmox inventory with read-only guest snapshots, confirmation-gated guest start/stop, automatic inventory refresh every 60 seconds, and an external-browser LXC xterm.js shell link.
+> **Project status:** Early MVP. The current build provides secure connection management, Proxmox inventory with read-only guest snapshots, confirmation-gated guest start/stop, automatic inventory refresh every 60 seconds, an external-browser LXC xterm.js shell link, and Guest Details/Dashboard webview panels for static configuration and live status/metrics.
 
 ## Contents
 
@@ -37,6 +37,8 @@ The first release is expected to include:
 - Read-only snapshot inventory beneath each QEMU virtual machine and LXC container.
 - Guest status, node, CPU percentage/count, memory, and uptime information.
 - Automatic inventory refresh every 60 seconds and when a connection is expanded.
+- A Guest Details webview panel showing static configuration for the selected guest.
+- A Dashboard webview panel showing live status, uptime, CPU/memory usage, and a rolling trend chart for the selected guest.
 - An SSH terminal action that pastes `ssh $USER@hostname` and waits for confirmation.
 - Guarded start and stop commands with confirmation and task polling.
 - API errors and operation progress in VS Code notifications and the Output channel.
@@ -54,7 +56,7 @@ VS Code commands and TreeDataProvider
        Proxmox VE REST API
 ```
 
-Proposed source structure:
+Source structure:
 
 ```text
 src/
@@ -63,7 +65,12 @@ src/
   proxmoxTypes.ts       # API response and domain types
   proxmoxService.ts     # Operations used by the UI
   explorerProvider.ts   # Connection, node, and guest tree
-  commands.ts           # Start, stop, restart, and refresh actions
+  guestDetailsPanel.ts  # Static guest configuration webview
+  dashboardPanel.ts     # Live guest status/metrics webview
+  webviewCommon.ts      # Shared HTML/formatting helpers for both webviews
+  shellAccess.ts        # SSH terminal and LXC console link commands
+  certificateTrust.ts   # Certificate fingerprint pinning
+  connectionStore.ts    # Connection metadata and secret storage
 test/
 ```
 
@@ -93,7 +100,7 @@ test/
 
 - Open VM and container consoles using supported Proxmox endpoints.
 - Add snapshot creation/deletion, backups, storage usage, and task history.
-- Add optional resource charts in a webview only where the tree view is insufficient.
+- Add resource charts in a webview only where the tree view is insufficient. (Done: Dashboard webview with a live CPU/memory trend chart.)
 
 ### Phase 5: Release Quality
 

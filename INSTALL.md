@@ -14,6 +14,8 @@ This project is an early MVP. The current build provides:
 - Guest status, VMID, CPU percentage/count, memory, and uptime details.
 - Automatic inventory refresh every 60 seconds and on connection expansion.
 - Confirmation-gated start and stop actions for QEMU virtual machines and LXC containers.
+- A **Guest Details** panel showing static configuration (identity, VMID, node, resource limits, boot, tags, and notes) for the guest selected in the Explorer.
+- A **Dashboard** panel showing live guest state (status, uptime, CPU/memory usage, and a rolling CPU & memory trend chart) that refreshes automatically every 5 seconds while a guest is selected.
 
 Guest shutdown, restart, VM console, snapshot creation/deletion, backup, and deletion commands are not implemented.
 
@@ -41,13 +43,13 @@ If a VSIX package is available:
 2. Open the Extensions view.
 3. Select the `...` menu.
 4. Choose **Install from VSIX...**.
-5. Select `proxmox-container-tools-ext-0.0.1.vsix`.
+5. Select the `proxmox-container-tools-ext-<version>.vsix` file (the version number matches the `version` field in `package.json`).
 6. Reload VS Code if prompted.
 
 The same installation can be performed from a VS Code-capable terminal:
 
 ```bash
-code --install-extension proxmox-container-tools-ext-0.0.1.vsix --force
+code --install-extension proxmox-container-tools-ext-<version>.vsix --force
 ```
 
 For Remote SSH or another remote VS Code session, run the command in the environment where the extension should be installed. The CLI should report the target host before installation.
@@ -132,6 +134,8 @@ When API-token privilege separation is enabled, grant the ACLs directly to the t
 The Proxmox view toolbar provides **Add Connection** and **Refresh All Connections** actions. The view context menu provides the same fallback actions when the toolbar is hidden. Connection rows provide inline refresh, update, and remove actions when available; the same actions are also available from the row context menu. Inventory refreshes every 60 seconds and when a connection is expanded. Per-connection refresh clears only that connection's cached inventory and snapshots.
 
 Expand a QEMU or LXC guest to view its read-only snapshots. Snapshot entries show their name, creation time, parent, and whether memory state was included. Snapshot creation and deletion are not available yet.
+
+Selecting a QEMU or LXC guest in the Explorer populates the **Guest Details** and **Dashboard** views in the Proxmox activity bar container. Guest Details shows static configuration; Dashboard shows live status, uptime, CPU/memory usage, and a trend chart that updates every 5 seconds. Selecting a different guest resets the Dashboard's trend history; deselecting a guest shows an empty state in both panels.
 
 Connections with an untrusted certificate show a warning-style server icon and an inline shield action. After trusting a certificate, the connection shows a verified icon; use its context menu to trust a replacement certificate after a server certificate rotation.
 

@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*.*.*'
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -51,7 +54,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: proxmox-container-tools-ext-0.0.1.vsix
+          files: proxmox-container-tools-ext-${{ steps.tag_name.outputs.VERSION }}.vsix
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
           generate_release_notes: true

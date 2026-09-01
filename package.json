@@ -2,7 +2,7 @@
   "name": "proxmox-container-tools-ext",
   "displayName": "Proxmox Container Tools",
   "description": "Manage Proxmox VE servers, virtual machines, and LXC containers from VS Code.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "bornilkca-cyber",
   "license": "MIT",
   "repository": {

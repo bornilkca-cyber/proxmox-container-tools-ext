@@ -52,6 +52,7 @@ class WebviewView {
     };
     this.title = '';
     this.description = '';
+    this.onDidDispose = new EventEmitter().event;
   }
 }
 
@@ -133,6 +134,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 };
 
 const { GuestDetailsPanelProvider } = require('../out/guestDetailsPanel');
+const { DashboardPanelProvider } = require('../out/dashboardPanel');
 const { ProxmoxService } = require('../out/proxmoxService');
 
 Module._load = originalLoad;
@@ -231,15 +233,14 @@ test('GuestDetailsPanelProvider escapes HTML in user-provided content', () => {
   assert.ok(!html.includes('<script>alert'), 'Should not allow inline script execution');
 });
 
-// Test: Uptime formatting
-test('GuestDetailsPanelProvider formats uptime correctly', () => {
+// Test: Uptime is owned by the Dashboard panel, not Guest Details
+test('GuestDetailsPanelProvider does not duplicate live uptime (owned by Dashboard)', () => {
   const extensionUri = mockVscode.Uri.file('/test');
   const provider = new GuestDetailsPanelProvider(extensionUri);
 
   const view = new WebviewView();
   provider.resolveWebviewView(view);
 
-  // Test 1: 1 day (86400 seconds)
   const guestInfo = {
     vmid: 101,
     node: 'pve-1',
@@ -256,20 +257,80 @@ test('GuestDetailsPanelProvider formats uptime correctly', () => {
   };
 
   provider.updateGuest(guestInfo);
-  let html = view.webview.html;
-  assert.ok(html.includes('1d') || html.includes('1 day'), 'Should format 1 day');
+  const html = view.webview.html;
+  assert.ok(!html.includes('Uptime'), 'Guest Details should not show uptime');
+});
+
+// Test: Dashboard's inline chart script must be valid JavaScript (regression
+// guard for HTML-escaping JSON data meant for a <script> tag, which breaks parsing)
+test('DashboardPanelProvider embeds syntactically valid inline script', () => {
+  const vm = require('node:vm');
+  const extensionUri = mockVscode.Uri.file('/test');
+  const provider = new DashboardPanelProvider(extensionUri);
+
+  const view = new WebviewView();
+  provider.resolveWebviewView(view);
+
+  try {
+    provider.updateGuest({
+      vmid: 101,
+      node: 'pve-1',
+      type: 'qemu',
+      uptime: 3600,
+      resource: { name: 'test-vm', status: 'running', cpu: 0.5, mem: 512, maxmem: 1024, maxcpu: 2 }
+    });
+    const html = view.webview.html;
+    const scriptMatch = html.match(/<script>\s*\(function\(\)[\s\S]*?<\/script>/);
+    assert.ok(scriptMatch, 'Should contain an inline chart script');
+
+    // Parsing (not executing) the script body must not throw a SyntaxError.
+    assert.doesNotThrow(() => new vm.Script(scriptMatch[0].replace(/<\/?script>/g, '')));
+  } finally {
+    provider.dispose();
+  }
+});
+
+// Test: Dashboard formats uptime correctly
+test('DashboardPanelProvider formats uptime correctly', () => {
+  const extensionUri = mockVscode.Uri.file('/test');
+  const provider = new DashboardPanelProvider(extensionUri);
+
+  const view = new WebviewView();
+  provider.resolveWebviewView(view);
+
+  const baseGuest = {
+    vmid: 101,
+    node: 'pve-1',
+    type: 'qemu',
+    resource: { name: 'test-vm', status: 'running', cpu: 0.1, mem: 512, maxmem: 1024, maxcpu: 2 }
+  };
+
+  // Test 1: 1 day (86400 seconds)
+  try {
+    provider.updateGuest({ ...baseGuest, uptime: 86400 });
+    const html = view.webview.html;
+    assert.ok(html.includes('1d'), 'Should format 1 day');
+  } finally {
+    provider.dispose();
+  }
 
   // Test 2: 1 hour (3600 seconds)
-  guestInfo.uptime = 3600;
-  provider.updateGuest(guestInfo);
-  html = view.webview.html;
-  assert.ok(html.includes('1h') || html.includes('1 hour'), 'Should format 1 hour');
+  try {
+    provider.updateGuest({ ...baseGuest, uptime: 3600 });
+    const html = view.webview.html;
+    assert.ok(html.includes('0d 1h'), 'Should format 1 hour');
+  } finally {
+    provider.dispose();
+  }
 
-  // Test 3: Mixed: 3 days 5 hours (273600 seconds)
-  guestInfo.uptime = 273600;
-  provider.updateGuest(guestInfo);
-  html = view.webview.html;
-  assert.ok(html.includes('3d') || html.includes('3 day'), 'Should include days in mixed uptime');
+  // Test 3: Mixed: 3 days 5 hours (277200 seconds)
+  try {
+    provider.updateGuest({ ...baseGuest, uptime: 277200 });
+    const html = view.webview.html;
+    assert.ok(html.includes('3d 5h'), 'Should include days in mixed uptime');
+  } finally {
+    provider.dispose();
+  }
 });
 
 // Test: Memory formatting

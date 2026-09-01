@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { GuestDetailInfo } from './proxmoxTypes';
+import { escapeHtml, formatBytes, getEmptyStateHtml } from './webviewCommon';
 
 /**
  * Provides a webview panel displaying detailed guest configuration information.
@@ -52,75 +53,10 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private getEmptyHtml(): string {
-    return `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <style>
-          body {
-            font-family: var(--vscode-font-family);
-            color: var(--vscode-foreground);
-            background-color: var(--vscode-editor-background);
-            margin: 0;
-            padding: 20px;
-          }
-          .empty-state {
-            text-align: center;
-            color: var(--vscode-descriptionForeground);
-            margin-top: 40px;
-          }
-          .empty-state h2 {
-            margin: 0 0 10px 0;
-            font-size: 16px;
-            font-weight: 500;
-          }
-          .empty-state p {
-            margin: 0;
-            font-size: 13px;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="empty-state">
-          <h2>No Guest Selected</h2>
-          <p>Select a QEMU VM or LXC container to view details</p>
-        </div>
-      </body>
-      </html>
-    `;
+    return getEmptyStateHtml('Select a QEMU VM or LXC container to view details');
   }
 
   private getGuestHtml(guest: GuestDetailInfo): string {
-    const formatBytes = (bytes?: number): string => {
-      if (bytes === undefined) {
-        return 'N/A';
-      }
-      if (bytes === 0) {
-        return '0 B';
-      }
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    };
-
-    const formatUptime = (seconds?: number): string => {
-      if (seconds === undefined) {
-        return 'N/A';
-      }
-      const days = Math.floor(seconds / 86400);
-      const hours = Math.floor((seconds % 86400) / 3600);
-      const mins = Math.floor((seconds % 3600) / 60);
-      if (days > 0) {
-        return `${days}d ${hours}h`;
-      }
-      if (hours > 0) {
-        return `${hours}h ${mins}m`;
-      }
-      return `${mins}m`;
-    };
-
     const statusColor = guest.status === 'running'
       ? 'var(--vscode-testing-iconPassed)'
       : guest.status === 'stopped'
@@ -274,10 +210,10 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
       </head>
       <body>
         <div class="header">
-          <h2 class="guest-name">${this.escapeHtml(guest.name || `${guest.type.toUpperCase()} ${guest.vmid}`)}</h2>
+          <h2 class="guest-name">${escapeHtml(guest.name || `${guest.type.toUpperCase()} ${guest.vmid}`)}</h2>
           <div class="status-badge">
             <div class="status-dot"></div>
-            ${this.escapeHtml(guest.status || 'unknown')}
+            ${escapeHtml(guest.status || 'unknown')}
           </div>
         </div>
 
@@ -285,7 +221,7 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
           <div class="info-grid">
             <div class="info-row">
               <div class="info-label">Type:</div>
-              <div class="info-value">${this.escapeHtml(guest.type.toUpperCase())}</div>
+              <div class="info-value">${escapeHtml(guest.type.toUpperCase())}</div>
             </div>
             <div class="info-row">
               <div class="info-label">VMID:</div>
@@ -293,14 +229,8 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
             </div>
             <div class="info-row full">
               <div class="info-label">Node:</div>
-              <div class="info-value">${this.escapeHtml(guest.node)}</div>
+              <div class="info-value">${escapeHtml(guest.node)}</div>
             </div>
-            ${guest.uptime !== undefined ? `
-            <div class="info-row">
-              <div class="info-label">Uptime:</div>
-              <div class="info-value">${formatUptime(guest.uptime)}</div>
-            </div>
-            ` : ''}
           </div>
         </div>
 
@@ -343,19 +273,19 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
             ${guest.hostname ? `
             <div class="info-row full">
               <div class="info-label">Host:</div>
-              <div class="info-value">${this.escapeHtml(guest.hostname)}</div>
+              <div class="info-value">${escapeHtml(guest.hostname)}</div>
             </div>
             ` : ''}
             ${guest.ostype ? `
             <div class="info-row">
               <div class="info-label">OS:</div>
-              <div class="info-value">${this.escapeHtml(guest.ostype)}</div>
+              <div class="info-value">${escapeHtml(guest.ostype)}</div>
             </div>
             ` : ''}
             ${guest.osrelease ? `
             <div class="info-row">
               <div class="info-label">Release:</div>
-              <div class="info-value">${this.escapeHtml(guest.osrelease)}</div>
+              <div class="info-value">${escapeHtml(guest.osrelease)}</div>
             </div>
             ` : ''}
           </div>
@@ -369,7 +299,7 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
             ${guest.boot ? `
             <div class="info-row full">
               <div class="info-label">Order:</div>
-              <div class="info-value">${this.escapeHtml(guest.boot)}</div>
+              <div class="info-value">${escapeHtml(guest.boot)}</div>
             </div>
             ` : ''}
             ${guest.onboot !== undefined ? `
@@ -386,7 +316,7 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
         <div class="section">
           <div class="section-title">Tags</div>
           <div class="tag-list">
-            ${guest.tags.split(';').map(tag => `<div class="tag">${this.escapeHtml(tag.trim())}</div>`).join('')}
+            ${guest.tags.split(';').map(tag => `<div class="tag">${escapeHtml(tag.trim())}</div>`).join('')}
           </div>
         </div>
         ` : ''}
@@ -394,7 +324,7 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
         ${guest.description ? `
         <div class="section">
           <div class="section-title">Notes</div>
-          <div class="description">${this.escapeHtml(guest.description)}</div>
+          <div class="description">${escapeHtml(guest.description)}</div>
         </div>
         ` : ''}
 
@@ -407,16 +337,5 @@ export class GuestDetailsPanelProvider implements vscode.WebviewViewProvider {
       </body>
       </html>
     `;
-  }
-
-  private escapeHtml(text: string): string {
-    const map: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#039;'
-    };
-    return text.replace(/[&<>"']/g, (m) => map[m]);
   }
 }
